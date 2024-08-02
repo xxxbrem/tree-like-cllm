@@ -32,10 +32,11 @@ path_root = Path(__file__).parents[2]
 sys.path.append(str(path_root))
 
 from cllm.utils import detect_repetitive_patterns
-from cllm.cllm_llama_modeling import delete_false_key_value, jacobi_forward_profiling
+from cllm.cllm_llama_modeling import delete_false_key_value, jacobi_forward_profiling, topK_genrate
 
 DynamicCache.delete_false_key_value = delete_false_key_value
 LlamaForCausalLM.jacobi_forward = jacobi_forward_profiling
+LlamaForCausalLM.topK_genrate = topK_genrate
 
 def jacobi_generate(inputs, model, tokenizer, max_new_tokens, max_new_seq_len):
     converge_step = []
@@ -55,7 +56,8 @@ def jacobi_generate(inputs, model, tokenizer, max_new_tokens, max_new_seq_len):
         # randomly initialize the first point of jacobian trajectory
         random_point = torch.tensor(random.choices(generation[0], k=(max_new_tokens-1)), device="cuda").view(1,-1)
         input_ids = torch.cat((first_correct_token.view(1,-1), random_point),dim=-1)
-        jacobian_trajectory, n_gram_generation, first_correct_token, iter_steps = model.jacobi_forward(input_ids=input_ids, max_new_tokens=max_new_tokens, past_key_values=past_key_values, use_cache = True, prefill_phase = False)
+        # jacobian_trajectory, n_gram_generation, first_correct_token, iter_steps = model.jacobi_forward(input_ids=input_ids, max_new_tokens=max_new_tokens, past_key_values=past_key_values, use_cache = True, prefill_phase = False)
+        jacobian_trajectory, n_gram_generation, first_correct_token, iter_steps = model.topK_genrate(input_ids, max_new_tokens, past_key_values, use_cache = True)
         forward_times += iter_steps
         all_jacobian_trajectory.append(jacobian_trajectory)
         eos_positions = torch.where(n_gram_generation[0]==tokenizer.eos_token_id)[0]
@@ -318,10 +320,10 @@ if __name__ == "__main__":
     parser.add_argument("--max_new_tokens", type=int, default=16)
     parser.add_argument("--max_new_seq_len", type=int, default=1024)
     parser.add_argument("--test_model_path", type=str,
-                        default="models/vicuna-7b-sharegpt-gpt4-48k")
+                        default="models/consistency-llm-7b-math")
     parser.add_argument("--teacher_model_path", type=str,
-                        default="cllm/consistency-llm-7b-sharegpt48k")
+                        default="models/Abel-7B-001")
     parser.add_argument("--data_size", type=str,
-                        default=500)
+                        default=10)
     args = parser.parse_args() 
     speed_compare(args)
