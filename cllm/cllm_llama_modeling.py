@@ -449,9 +449,9 @@ def topK_genrate(self, input_ids, max_new_tokens, past_key_values, use_cache=Tru
         
         if tree_flag:
             if attention_mask is None:
-                # attention_mask = torch.ones(
-                #     (batch_size, seq_length), dtype=torch.bool, device=inputs_embeds.device
-                # )
+                attention_mask = torch.ones(
+                    (batch_size, seq_length + past_key_values_length), dtype=torch.bool, device=inputs_embeds.device
+                )
                 attention_mask = _prepare_decoder_attention_mask(
                     attention_mask, (batch_size, seq_length), inputs_embeds, past_key_values_length, tree_mask
                 )
@@ -534,6 +534,17 @@ def topK_genrate(self, input_ids, max_new_tokens, past_key_values, use_cache=Tru
         
         # for short fastforward
         
+
+        if not tree_flag:
+        
+            if torch.all(torch.eq(current_point, next_point)).item():    
+                first_correct_token = torch.argmax(torch.nn.functional.softmax(logits, dim=-1), dim=-1)[:,-1]
+                break
+            past_key_values.delete_false_key_value(seq_length)
+            
+            correct_token_index = int(torch.where((current_point == next_point) == False)[1][0])
+        iter_counter += 1
+        
         if correct_token_index > 1:
             # correct_token_index
             candidates_num = correct_token_index + 1 + (top_k**(depth+1)-top_k)//(top_k-1) + (max_new_tokens-correct_token_index-1-depth)*9
@@ -568,14 +579,5 @@ def topK_genrate(self, input_ids, max_new_tokens, past_key_values, use_cache=Tru
             for _ in range(remain_len):
                 tree_mask[batch_size-1][batch_size-1][start:, start:start+top_k**(depth)] = torch.eye(top_k**(depth), top_k**(depth)).repeat((candidates_num-start)//top_k**(depth), 1)
                 start += top_k**depth
-        else:
-        
-            if torch.all(torch.eq(current_point, next_point)).item():    
-                first_correct_token = torch.argmax(torch.nn.functional.softmax(logits, dim=-1), dim=-1)[:,-1]
-                break
-            past_key_values.delete_false_key_value(seq_length)
-            
-            correct_token_index = int(torch.where((current_point == next_point) == False)[1][0])
-        iter_counter += 1
 
     return jacobian_trajectory[:-1], next_point, first_correct_token, iter_counter
