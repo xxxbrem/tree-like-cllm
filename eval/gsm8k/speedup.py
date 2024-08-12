@@ -104,7 +104,8 @@ def jacobian_speed_evaluate(processed_prompt, model, tokenizer, max_new_tokens, 
 def speed_compare(args):
     # Load model and tokenizer
     model = transformers.LlamaForCausalLM.from_pretrained(args.test_model_path, low_cpu_mem_usage=True, device_map='auto', 
-                                             torch_dtype=torch.bfloat16, attn_implementation="flash_attention_2")
+                                            #  torch_dtype=torch.bfloat16, attn_implementation="flash_attention_2")
+                                            torch_dtype=torch.bfloat16)
     tokenizer = transformers.AutoTokenizer.from_pretrained(
         args.teacher_model_path,
         padding_side="right",

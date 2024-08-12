@@ -1,3 +1,5 @@
 models/
 .vscode/
 tmp*
+*.sh
+log/

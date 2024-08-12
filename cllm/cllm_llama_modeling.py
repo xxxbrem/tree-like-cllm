@@ -487,6 +487,20 @@ def topK_genrate(self, input_ids, max_new_tokens, past_key_values, use_cache=Tru
             )
 
             hidden_states = layer_outputs[0]
+        # for idx, decoder_layer in enumerate(self.model.layers):
+        #     past_key_value = (
+        #         past_key_values[idx] if past_key_values is not None else None
+        #     )
+
+        #     layer_outputs = decoder_layer(
+        #         hidden_states,
+        #         attention_mask=attention_mask,
+        #         position_ids=position_ids,
+        #         past_key_value=past_key_value,
+        #         use_cache=use_cache,
+        #     )
+
+        #     hidden_states = layer_outputs[0]
 
         hidden_states = self.model.norm(hidden_states)
 
@@ -495,6 +509,7 @@ def topK_genrate(self, input_ids, max_new_tokens, past_key_values, use_cache=Tru
         
         if tree_flag:
             logits = logits[0, retrieve_indices]
+            print(f"logits:\n{logits}")
         # if iter_counter == 0:
             # topk_token = torch.topk(torch.nn.functional.softmax(logits, dim=-1)/0.01, top_k, dim=-1).indices[:, 0, :]
             # torch.Size([1, 3])
