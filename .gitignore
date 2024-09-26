@@ -3,3 +3,7 @@ models/
 tmp*
 *.sh
 log/
+wandb
+data/speedup_profiling_results
+data/collected_jacobi_trajectory
+cllm/__pycache__

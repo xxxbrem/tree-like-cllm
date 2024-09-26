@@ -24,7 +24,7 @@ from transformers.modeling_attn_mask_utils import (
 import torch.nn.functional as F
 from transformers import LlamaModel,LlamaForCausalLM
 import argparse
-from cllm.utils import get_logits, _prepare_decoder_attention_mask
+from cllm.utils import get_logits, _prepare_decoder_attention_mask, count_matching_tokens
 
 def delete_false_key_value(
         self,
@@ -247,6 +247,7 @@ def jacobi_forward(
 @torch.inference_mode()
 def jacobi_forward_profiling(
     self,
+    tokenizer,
     input_ids: torch.LongTensor = None,
     attention_mask: Optional[torch.Tensor] = None,
     position_ids: Optional[torch.LongTensor] = None,
@@ -403,6 +404,7 @@ def jacobi_forward_profiling(
             next_point= torch.cat((current_point[0, 0].view(1,-1), all_shift_one_token[0, :seq_length-1].view(1,-1)), dim=-1)
             jacobian_trajectory.append(next_point)
             
+
             if torch.all(torch.eq(current_point, next_point)).item():    
                 #print('Successfully break!')
                 #print(next_point)
@@ -411,11 +413,13 @@ def jacobi_forward_profiling(
             past_key_values.delete_false_key_value(seq_length)
 
             iter_counter += 1
-
+        print(next_point)
+        print(tokenizer.decode(next_point[0]))
+        print(iter_counter)
         return jacobian_trajectory[:-1], next_point, first_correct_token, iter_counter
     
 @torch.inference_mode()
-def topK_genrate(self, input_ids, max_new_tokens, past_key_values, use_cache=True, top_k=3, total_tokens=63, depth=2):
+def topK_genrate(self, tokenizer, input_ids, max_new_tokens, past_key_values, use_cache=True, top_k=3, total_tokens=63, depth=2):
     if input_ids is not None:
         batch_size, seq_length = input_ids.shape[:2]
     jacobian_trajectory = []
@@ -425,12 +429,18 @@ def topK_genrate(self, input_ids, max_new_tokens, past_key_values, use_cache=Tru
     iter_counter = 0
     correct_token_index = 1
     tree_flag = False
+    matching_count = 0
+    previous_point = None
     while True:
-
-        current_point = next_point
+        
+        if not tree_flag:
+            current_point = next_point  
+        else:
+            current_point = tree_candidates
+            previous_point = next_point
         inputs_embeds = self.model.embed_tokens(current_point) if not tree_flag else self.model.embed_tokens(tree_candidates) 
         attention_mask = None
-        position_ids = None if not tree_flag else position_ids
+        position_ids = None if not tree_flag else tree_position_ids
         seq_length = inputs_embeds.shape[1]
         if use_cache:
             use_legacy_cache = not isinstance(past_key_values, Cache)
@@ -470,9 +480,10 @@ def topK_genrate(self, input_ids, max_new_tokens, past_key_values, use_cache=Tru
             )
         else:
             # 4d mask is passed through the layers
-            attention_mask = _prepare_4d_causal_attention_mask(
-                attention_mask, (batch_size, seq_length), inputs_embeds, past_key_values_length
-            )
+            # attention_mask = _prepare_4d_causal_attention_mask(
+            #     attention_mask, (batch_size, seq_length), inputs_embeds, past_key_values_length
+            # )
+            attention_mask = None
         # embed positions
         hidden_states = inputs_embeds
 
@@ -487,70 +498,82 @@ def topK_genrate(self, input_ids, max_new_tokens, past_key_values, use_cache=Tru
             )
 
             hidden_states = layer_outputs[0]
-        # for idx, decoder_layer in enumerate(self.model.layers):
-        #     past_key_value = (
-        #         past_key_values[idx] if past_key_values is not None else None
-        #     )
-
-        #     layer_outputs = decoder_layer(
-        #         hidden_states,
-        #         attention_mask=attention_mask,
-        #         position_ids=position_ids,
-        #         past_key_value=past_key_value,
-        #         use_cache=use_cache,
-        #     )
-
-        #     hidden_states = layer_outputs[0]
 
         hidden_states = self.model.norm(hidden_states)
 
 
         logits = get_logits(self, hidden_states)
         
+        iter_counter += 1
+        
         if tree_flag:
             logits = logits[0, retrieve_indices]
-            print(f"logits:\n{logits}")
-        # if iter_counter == 0:
-            # topk_token = torch.topk(torch.nn.functional.softmax(logits, dim=-1)/0.01, top_k, dim=-1).indices[:, 0, :]
-            # torch.Size([1, 3])
-        # all_shift_one_token = generate(logits, current_point, past_key_values, top_k=3, total_tokens=63, depth=3)
-        
-        topk_token = torch.topk(torch.nn.functional.softmax(logits, dim=-1)/0.01, top_k, dim=-1).indices
-        # torch.nonzero(topk_token[0] == 29889, as_tuple=False)
-        all_shift_one_token = torch.argmax(torch.nn.functional.softmax(logits, dim=-1) / 0.01, dim=-1)
-        next_point = torch.cat((current_point[0, 0].view(1,-1), all_shift_one_token[0, :seq_length-1].view(1,-1)), dim=-1)
-        jacobian_trajectory.append(next_point)
-        
-        # for repeatitive tokens
-        # current_token = -1
-        # for i in range(correct_token_index, seq_length-1):
-        #     if current_token == next_point[:, i]:
-        #         possible_point = torch.zeros((1, seq_length+4), device=next_point.device, dtype=int)
-        #         possible_point[0][:i-1] = next_point[0][:i-1]
-        #         possible_point[0][i-1:i+2] = topk_token[0][i-1][:3]
-        #         possible_point[0][i+2:i+5] = topk_token[0][i][:3]
-        #         possible_point[0][i+5:] = next_point[0][i+1:]
-        #         tree_flag = True
-        #         position_ids = torch.zeros_like(possible_point, device=position_ids.device)
-        #         position_ids[0][:i-1] = torch.arange(0, i-1)
-        #         position_ids[0][i-1:i+2] = torch.tensor([i-1]).repeat(3)
-        #         position_ids[0][i+2:i+5] = torch.tensor([i]).repeat(3)
-        #         position_ids[0][i+5:] = torch.arange(i+5, seq_length+4)
-                
-        #         retrieve_indices = torch.cat((position_ids[:, :i], position_ids[:, i+4:]), dim=1).repeat(9, 1)
-        #         retrieve_indices[:, i-1] = torch.tensor([i-1, i, i+1], device=retrieve_indices.device).repeat_interleave(3)
-        #         retrieve_indices[:, i] = torch.arange(i+2, i+5, device=retrieve_indices.device).repeat(3)
-        #         break
-        #     current_token = next_point[:, i]
-        
-        # print(f"itr: {iter_counter}")
-        # print(next_point)
-        # torch.topk(torch.nn.functional.softmax(logits, dim=-1)/0.01, 3, dim=-1)
-        
-        # for short fastforward
-        
+            all_shift_one_token = torch.argmax(torch.nn.functional.softmax(logits, dim=-1) / 0.01, dim=-1)
+            
+            # find matching tokens at the beginning of all sequences
+            sequences = all_shift_one_token[0]
 
-        if not tree_flag:
+            matching_count = count_matching_tokens(sequences)
+            
+            added_matching_count = 0
+            # while (matching_count + added_matching_count < max_new_tokens and added_matching_count < 8):
+            #     unique_elements, counts = torch.unique(sequences[:, matching_count+added_matching_count], return_counts=True)
+            #     max_counts_index = torch.where(counts == max(counts))[0]
+            #     if len(max_counts_index) > 1:
+            #         break
+                
+            #     unique_elements[max_counts_index]
+            #     next_token_index = torch.where(sequences[:, matching_count+added_matching_count] == unique_elements[max_counts_index])[0]
+            #     added_matching_count += 1
+            #     sequences = sequences[next_token_index]
+
+            # chosen_index = torch.argmax(torch.sum(torch.eq(torch.topk(torch.nn.functional.softmax(logits, dim=-1)/0.01, top_k, dim=-1).indices[:, :, :, 0], sequences[0]), dim=2))
+            #                 assert(count_matching_tokens(torch.cat((previous_point, next_point))) >= matching_count)
+            
+            chosen_index = 0
+            right_index1 = torch.where(root_node_topk[0] == sequences[:, correct_token_index].unique()[0])[0]
+            if len(right_index1) > 0:
+                right_index1 = int(right_index1)
+                right_index2 = torch.where(root_node_topk[1] == torch.mode(sequences[right_index1*top_k:(right_index1+1)*top_k, correct_token_index+1]).values)[0]
+                if len(right_index2) > 0:
+                    right_index2 = int(right_index2)
+                    chosen_index = right_index1 * top_k + right_index2
+                else:
+                    chosen_index = right_index1 * top_k 
+            
+            # topk_token = torch.mode(torch.topk(torch.nn.functional.softmax(logits, dim=-1)/0.01, top_k, dim=-1).indices,dim=1).values
+            topk_token = torch.topk(torch.nn.functional.softmax(logits, dim=-1)/0.01, top_k, dim=-1).indices[:, chosen_index]
+            topk_token = torch.cat((input_ids[:, 0].repeat(top_k).unsqueeze(0).unsqueeze(0), (topk_token[:, :-1, :])), dim=1)
+            next_point = topk_token[:, :, 0]
+            jacobian_trajectory.append(next_point)
+            if iter_counter > 2:
+                matching_count += 2
+            past_key_values.delete_false_key_value(seq_length)
+            # converged
+            if count_matching_tokens(torch.cat((previous_point, next_point))) >= max_new_tokens - 1:
+                # TODO: make sure first_correct_token
+                # first_correct_token = all_shift_one_token[0, 0, -1]
+                # break
+                tree_flag = False
+                continue
+            else:                          
+                correct_token_index = matching_count + added_matching_count
+                if correct_token_index >= max_new_tokens - 2:
+                    tree_flag = False
+                    continue
+                # radical
+                # unique_elements, counts = torch.unique(next_point[:, correct_token_index:], return_counts=True)
+                # repeated_items = unique_elements[counts > 1]
+                # if len(repeated_items) > 0:
+                #     correct_token_index += int(torch.where(next_point[:, correct_token_index:] == repeated_items)[1][0])
+
+        else:
+            topk_token = torch.topk(torch.nn.functional.softmax(logits, dim=-1)/0.01, top_k, dim=-1).indices
+            topk_token = torch.cat((input_ids[:, 0].repeat(top_k).unsqueeze(0).unsqueeze(0), (topk_token[:, :-1, :])), dim=1)
+            # torch.nonzero(topk_token[0] == 29889, as_tuple=False)
+            all_shift_one_token = torch.argmax(torch.nn.functional.softmax(logits, dim=-1) / 0.01, dim=-1)
+            next_point = torch.cat((current_point[0, 0].view(1,-1), all_shift_one_token[0, :seq_length-1].view(1,-1)), dim=-1)
+            jacobian_trajectory.append(next_point)
         
             if torch.all(torch.eq(current_point, next_point)).item():    
                 first_correct_token = torch.argmax(torch.nn.functional.softmax(logits, dim=-1), dim=-1)[:,-1]
@@ -558,10 +581,11 @@ def topK_genrate(self, input_ids, max_new_tokens, past_key_values, use_cache=Tru
             past_key_values.delete_false_key_value(seq_length)
             
             correct_token_index = int(torch.where((current_point == next_point) == False)[1][0])
-        iter_counter += 1
         
-        if correct_token_index > 1:
-            # correct_token_index
+        root_node_topk = topk_token[batch_size-1][correct_token_index+1:correct_token_index+1+depth]
+        
+        # tree-like
+        if iter_counter < 2 or tree_flag == True:
             candidates_num = correct_token_index + 1 + (top_k**(depth+1)-top_k)//(top_k-1) + (max_new_tokens-correct_token_index-1-depth)*9
             tree_candidates = torch.zeros((batch_size, candidates_num), device=next_point.device, dtype=int)
             tree_position_ids = torch.zeros((batch_size, candidates_num), device=next_point.device, dtype=int)
@@ -575,10 +599,10 @@ def topK_genrate(self, input_ids, max_new_tokens, past_key_values, use_cache=Tru
             
             start = correct_token_index+1
             end = correct_token_index+1+top_k
-            
+            # only support depth <= 2
             for j in range(depth):
                 
-                tree_candidates[batch_size-1][start:end] = topk_token[batch_size-1][correct_token_index+j][:top_k].repeat_interleave(top_k*j if j > 0 else 1)
+                tree_candidates[batch_size-1][start:end] = topk_token[batch_size-1][correct_token_index+1+j][:top_k].repeat(top_k*j if j > 0 else 1)
                 tree_position_ids[batch_size-1][start:end] = torch.tensor([correct_token_index+1+j] * (end-start), device=next_point.device)
                 retrieve_indices[batch_size-1][:, correct_token_index+1+j] = torch.arange(start, end, device=next_point.device).repeat_interleave(top_k**(depth-j-1))
                 tree_mask[batch_size-1][batch_size-1][start:, start:start+top_k**(j+1)] = torch.eye(top_k**(j+1), top_k**(j+1)).repeat((candidates_num-start)//top_k**(j+1), 1)
@@ -590,9 +614,12 @@ def topK_genrate(self, input_ids, max_new_tokens, past_key_values, use_cache=Tru
             remain_len = max_new_tokens-(correct_token_index+1+depth)
             tree_candidates[batch_size-1][start:] = next_point[batch_size-1][correct_token_index+1+depth:].repeat_interleave(top_k**depth)
             tree_position_ids[batch_size-1][start:] = torch.arange(tree_position_ids[0][start-1]+1, tree_position_ids[0][start-1]+1+remain_len).repeat_interleave(top_k**depth)
-            retrieve_indices[batch_size-1][:, correct_token_index+1+depth:] = torch.arange(start, candidates_num).reshape(remain_len, -1).T
+            if start < candidates_num:
+                retrieve_indices[batch_size-1][:, correct_token_index+1+depth:] = torch.arange(start, candidates_num).reshape(remain_len, -1).T
             for _ in range(remain_len):
                 tree_mask[batch_size-1][batch_size-1][start:, start:start+top_k**(depth)] = torch.eye(top_k**(depth), top_k**(depth)).repeat((candidates_num-start)//top_k**(depth), 1)
                 start += top_k**depth
-
+    print(next_point)
+    print(tokenizer.decode(next_point[0]))
+    print(iter_counter)
     return jacobian_trajectory[:-1], next_point, first_correct_token, iter_counter

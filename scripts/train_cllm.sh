@@ -1,5 +1,5 @@
-export CUDA_VISIBLE_DEVICES=0,1,2,3
-export WANDB_PROJECT=consistency_llm
+export CUDA_VISIBLE_DEVICES=0
+export WANDB_PROJECT=consistency_llm_tinyllama
 
 model_path=$1
 trajectory_file=$2
@@ -7,7 +7,7 @@ output_path=$3
 n_token_seq_size=$4
 qlora=$5
 
-torchrun --nnodes=1 --nproc_per_node=4 --rdzv_id=101 --rdzv_endpoint='localhost:5666' \
+torchrun --nnodes=1 --nproc_per_node=1 --rdzv_id=101 --rdzv_endpoint='localhost:5666' \
     --master_port 10000 \
     cllm/train_cllm_global.py \
     --target_model_path ${model_path} \
@@ -22,7 +22,7 @@ torchrun --nnodes=1 --nproc_per_node=4 --rdzv_id=101 --rdzv_endpoint='localhost:
     --gradient_accumulation_steps 1 \
     --gradient_checkpointing True \
     --save_strategy "steps" \
-    --save_steps 100 \
+    --save_steps 30000 \
     --save_total_limit 50 \
     --learning_rate 2e-5 \
     --weight_decay 0. \

@@ -46,7 +46,7 @@ def jacobi_generate(inputs, model, tokenizer, max_new_tokens, max_new_seq_len):
     prompt_len = torch.sum(inputs['attention_mask'], dim=-1)
     generation = inputs['input_ids']
     ### prefill the kv-cache
-    past_key_values, first_correct_token = model.jacobi_forward(input_ids=inputs['input_ids'], max_new_tokens=max_new_tokens, past_key_values=None, use_cache = True, prefill_phase = True)
+    past_key_values, first_correct_token = model.jacobi_forward(tokenizer, input_ids=inputs['input_ids'], max_new_tokens=max_new_tokens, past_key_values=None, use_cache = True, prefill_phase = True)
     ### generation phase
     itr = 0
     eos_reached = False
@@ -54,10 +54,13 @@ def jacobi_generate(inputs, model, tokenizer, max_new_tokens, max_new_seq_len):
         itr+=1
         bsz = 1 # only support batch_size = 1 now
         # randomly initialize the first point of jacobian trajectory
+        seed = 42
+        random.seed(seed)
         random_point = torch.tensor(random.choices(generation[0], k=(max_new_tokens-1)), device="cuda").view(1,-1)
         input_ids = torch.cat((first_correct_token.view(1,-1), random_point),dim=-1)
-        # jacobian_trajectory, n_gram_generation, first_correct_token, iter_steps = model.jacobi_forward(input_ids=input_ids, max_new_tokens=max_new_tokens, past_key_values=past_key_values, use_cache = True, prefill_phase = False)
-        jacobian_trajectory, n_gram_generation, first_correct_token, iter_steps = model.topK_genrate(input_ids, max_new_tokens, past_key_values, use_cache = True)
+        # jacobian_trajectory, n_gram_generation, first_correct_token, iter_steps = model.jacobi_forward(tokenizer, input_ids=input_ids, max_new_tokens=max_new_tokens, past_key_values=past_key_values, use_cache = True, prefill_phase = False)
+        jacobian_trajectory, n_gram_generation, first_correct_token, iter_steps = model.topK_genrate(tokenizer, input_ids, max_new_tokens, past_key_values, use_cache = True)
+
         forward_times += iter_steps
         all_jacobian_trajectory.append(jacobian_trajectory)
         eos_positions = torch.where(n_gram_generation[0]==tokenizer.eos_token_id)[0]
@@ -122,7 +125,7 @@ def speed_compare(args):
             data.append(json.loads(line))
     
     per_request_meta_trajectory_records = []
-    data_lst = range(args.data_size)
+    data_lst = range(args.data_start, args.data_end)
     # only support batch size ==1 now
     for i in tqdm(data_lst): 
         d = data[i]
@@ -297,14 +300,14 @@ def speed_compare(args):
     if not os.path.exists(save_path):
         os.makedirs(save_path)
 
-    new_file_path= f'gsm8k_speedup_profiling_results_{args.max_new_tokens}_{args.max_new_seq_len}_{args.data_size}_stats.json'
+    new_file_path= f'gsm8k_speedup_profiling_results_{args.max_new_tokens}_{args.max_new_seq_len}_{-args.data_start+args.data_end}_stats.json'
     fast_forward_and_fix_points_statistics_file = os.path.join(save_path, new_file_path)
 
     with open(fast_forward_and_fix_points_statistics_file, 'w') as f:
         json.dump(fast_forward_and_fix_points_statistics, f, indent=4)
     
-    ar_time_speed = ar_time_speed[1:]
-    jacobian_time_speed = jacobian_time_speed[1:]
+    # ar_time_speed = ar_time_speed[1:]
+    # jacobian_time_speed = jacobian_time_speed[1:]
     print(f'ar speed: {ar_time_speed}')
     print(f'jacobian speed: {jacobian_time_speed}')
     print(f'The max speed of model {args.test_model_path} using jacobian iteration (max_new_tokens: {max_new_tokens}) is {max(jacobian_time_speed)}')
@@ -319,12 +322,16 @@ if __name__ == "__main__":
     parser.add_argument("--filename", type=str,
                         default="eval/gsm8k/test.jsonl")
     parser.add_argument("--max_new_tokens", type=int, default=16)
-    parser.add_argument("--max_new_seq_len", type=int, default=1024)
+    parser.add_argument("--max_new_seq_len", type=int, default=512)
     parser.add_argument("--test_model_path", type=str,
                         default="models/consistency-llm-7b-math")
+                        # default="models/TinyLlama_v1.1_math_code")
     parser.add_argument("--teacher_model_path", type=str,
-                        default="models/Abel-7B-001")
-    parser.add_argument("--data_size", type=str,
-                        default=10)
+                        default="models/consistency-llm-7b-math")
+                        # default="models/TinyLlama_v1.1_math_code")
+    parser.add_argument("--data_start", type=str,
+                        default=14)
+    parser.add_argument("--data_end", type=str,
+                        default=24)
     args = parser.parse_args() 
     speed_compare(args)

@@ -234,3 +234,15 @@ def _prepare_decoder_attention_mask(
             ] = combined_attention_mask.min()
 
     return combined_attention_mask
+
+def count_matching_tokens(sequences):
+    num_sequences = sequences.size(0)
+    seq_length = sequences.size(1)
+
+    for i in range(seq_length):
+        # Get the column of tokens at index i
+        column = sequences[:, i]
+        # Check if all tokens in the column are the same
+        if (column != column[0]).any():
+            return i
+    return seq_length

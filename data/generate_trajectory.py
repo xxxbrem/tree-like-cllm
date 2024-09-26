@@ -347,8 +347,9 @@ if __name__ == "__main__":
     parser.add_argument("--max_new_tokens", type=int, default=16)
     parser.add_argument("--max_new_seq_len", type=int, default=512)
     parser.add_argument("--model", type=str,
-                        default="models/Abel-7B-001")
-    parser.add_argument("--data_size", default=10000)
+                        default="models/consistency-llm-7b-math")
+                        # default="models/Abel-7B-001")
+    parser.add_argument("--data_size", default=100000)
     parser.add_argument("--use_aug", default=True)
     parser.add_argument("--use_labels", default=True)
     args = parser.parse_args()
@@ -357,7 +358,7 @@ if __name__ == "__main__":
     max_new_tokens = args.max_new_tokens
     max_new_seq_len = args.max_new_seq_len
     model = LlamaForCausalLM.from_pretrained(model_path, low_cpu_mem_usage=True, device_map='cuda', 
-                                             torch_dtype=torch.bfloat16, attn_implementation="flash_attention_2")
+                                             torch_dtype=torch.bfloat16, attn_implementation="flash_attention_2", ignore_mismatched_sizes=True)
     if 'gsm8k' in model_path.lower():
         tokenizer = AutoTokenizer.from_pretrained(model_path, padding_side="right", use_fast=False)
     else:
